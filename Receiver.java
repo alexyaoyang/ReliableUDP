@@ -24,7 +24,7 @@ public class Receiver {
 			FileOutputStream output = null;
 			CRC32 crc;
 			int ack = 0, seq, num_bytes = 0;
-			String header_data, outputFile;
+			String header_data, outputFile, response;
 			Long crc_calculated, crc_received;
 			boolean error;
 			try {
@@ -35,15 +35,17 @@ public class Receiver {
 				DatagramPacket out_pkt;
 				while (true) {
 					error = false;
+					response = "";
 					// receive packet
 					sk2.receive(in_pkt);
 
 					header_data = (new String(in_pkt.getData(),0,header_size));
 					System.out.println(header_data);
-					
+
 					if(header_data.contains("REG:")) { continue; }
 
-					if(!header_data.contains("C:") || !header_data.contains("S:") || !header_data.contains("O:") || !header_data.contains("N:")){
+					if(header_data.contains("N:-1")) { response = "FIN"; }
+					else if(!header_data.contains("C:") || !header_data.contains("S:") || !header_data.contains("O:") || !header_data.contains("N:")){
 						System.err.println("Flags not found!");
 						error = true;
 					}
@@ -54,13 +56,13 @@ public class Receiver {
 							crc.update(in_data, header_size, pkt_size-header_size);
 							crc_calculated = crc.getValue();
 							crc_received = Long.parseLong((header_data.substring(2,15).trim()));
-							error = crc_received != crc_calculated;
+							error = !crc_received.equals(crc_calculated);
 							System.out.println("checksum: "+crc_received);
 						} catch (Exception e){
 							e.printStackTrace();
 							error = true;
 						}
-						
+
 						//sequence
 						try{
 							seq = Integer.parseInt(header_data.substring(17,30).trim());
@@ -81,28 +83,34 @@ public class Receiver {
 						}
 
 						//output file
-						try{
-							outputFile = header_data.substring(50,150).trim();
-							file = new File(path, outputFile);
-							output = new FileOutputStream(file);
-							System.out.println("outputFile: "+outputFile);
-						} catch (Exception e){
-							e.printStackTrace();
-							error = true;
+						if (file==null) {
+							try{
+								outputFile = header_data.substring(50,150).trim();
+								file = new File(path, outputFile);
+								output = new FileOutputStream(file);
+								System.out.println("outputFile: "+outputFile);
+							} catch (Exception e){
+								e.printStackTrace();
+								error = true;
+							}
 						}
 
 					}
-					
+
 					//write response
-					String response = ""; 
-					if(error){ response = "NAK"; }
-					else { response = "ACK:" + ack; }
+					if(response.isEmpty()){
+						if(error){ response = "NAK"; }
+						else { response = "ACK:" + ack; }
+					}
 					byte[] responseB = response.getBytes();
-					
+
 					// send received packet
 					out_pkt = new DatagramPacket(responseB, responseB.length, dst_addr, sk3_dst_port);
 					sk3.send(out_pkt);
-					
+
+					//exit if finished
+					if(response.compareTo("FIN")==0){ output.flush(); System.exit(-1); }
+
 					//write after sending to minimize delay
 					if(!error){
 						output.write(in_data, header_size, num_bytes);

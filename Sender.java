@@ -49,8 +49,6 @@ public class Sender {
 						num_bytes_read = -1;
 						if ((num_bytes_read = fileToSend.read(out_data, header_size, pkt_size-header_size)) == -1) {
 							System.out.println("reached end of file!");
-							
-							System.exit(-1);
 						}
 						
 						//checksum 12
@@ -96,6 +94,10 @@ public class Sender {
 
 						// increase counter
 						sequence++;
+						
+						if(num_bytes_read==-1){
+							System.exit(-1);
+						}
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
@@ -122,17 +124,13 @@ public class Sender {
 				byte[] in_data = new byte[pkt_size];
 				DatagramPacket in_pkt = new DatagramPacket(in_data,
 						in_data.length);
+				String response_data;
 				try {
 					while (true) {
 						sk_in.receive(in_pkt);
-						System.out.print((new Date().getTime())
-								+ ": sender received " + in_pkt.getLength()
-								+ "bytes from "
-								+ in_pkt.getAddress().toString() + ":"
-								+ in_pkt.getPort() + ". data are ");
-						for (int i = 0; i < pkt_size; ++i)
-							System.out.print(in_data[i]);
-						System.out.println();
+						response_data = (new String(in_pkt.getData(),0,header_size));
+						
+						System.out.println("Response received: "+response_data);
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
