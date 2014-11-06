@@ -2,12 +2,14 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.*;
 import java.util.zip.CRC32;
 
 public class Receiver {
 	static int pkt_size = 1000;
-	static int header_size = 150;
+	static int header_size = 20;
 
 	public Receiver(int sk2_dst_port, int sk3_dst_port, String outputPath) {
 		DatagramSocket sk2, sk3;
@@ -23,50 +25,34 @@ public class Receiver {
 			File file = null;
 			FileOutputStream output = null;
 			CRC32 crc;
-			int ack = 0, seq, num_bytes = 0;
-			String header_data, outputFile, response;
-			Long crc_calculated, crc_received;
+			int ack = 0, seq = -1, num_bytes = 0, filename_length = 0;
+			String outputFile, response;
 			boolean error;
 			try {
 				byte[] in_data = new byte[pkt_size];
-				DatagramPacket in_pkt = new DatagramPacket(in_data,
-						in_data.length);
+				DatagramPacket in_pkt = new DatagramPacket(in_data, in_data.length);
 				InetAddress dst_addr = InetAddress.getByName("127.0.0.1");
 				DatagramPacket out_pkt;
+				byte[] temp;
 				while (true) {
 					error = false;
 					response = "";
 					// receive packet
 					sk2.receive(in_pkt);
 
-					header_data = (new String(in_pkt.getData(),0,header_size));
-					System.out.println(header_data);
-
-					if(header_data.contains("REG:")) { continue; }
-
-					if(header_data.contains("N:-1")) { response = "FIN"; }
-					else if(!header_data.contains("C:") || !header_data.contains("S:") || !header_data.contains("O:") || !header_data.contains("N:")){
-						System.err.println("Flags not found!");
-						error = true;
-					}
-					else{
-						//checksum
-						try{
-							crc = new CRC32();
-							crc.update(in_data, header_size, pkt_size-header_size);
-							crc_calculated = crc.getValue();
-							crc_received = Long.parseLong((header_data.substring(2,15).trim()));
-							error = !crc_received.equals(crc_calculated);
-							System.out.println("checksum: "+crc_received);
-						} catch (Exception e){
-							e.printStackTrace();
-							error = true;
-						}
+					//checksum first
+					crc = new CRC32();
+					crc.update(in_data, 8, pkt_size-8);
+					temp = new byte[8];
+					System.arraycopy(in_data, 0, temp, 0, 8);
+					if(ByteBuffer.wrap(temp).getLong() == crc.getValue()){
 
 						//sequence
 						try{
-							seq = Integer.parseInt(header_data.substring(17,30).trim());
-							if(seq-ack == 1){ ack = seq; }
+							temp = new byte[4];
+							System.arraycopy(in_data, 8, temp, 0, 4);
+							seq = ByteBuffer.wrap(temp).getInt();
+							if(seq-ack == 1 || seq == 0){ ack = seq; }
 							System.out.println("seq: "+seq);
 						} catch (Exception e){
 							e.printStackTrace();
@@ -75,20 +61,33 @@ public class Receiver {
 
 						//num bytes
 						try{
-							num_bytes = Integer.parseInt(header_data.substring(32,35).trim());
+							temp = new byte[4];
+							System.arraycopy(in_data, 12, temp, 0, 4);
+							num_bytes = ByteBuffer.wrap(temp).getInt();		
 							System.out.println("num_bytes: "+num_bytes);
+							if(num_bytes == -1) { response = "FIN"; }
 						} catch (Exception e){
 							e.printStackTrace();
 							error = true;
 						}
 
 						//output file
-						if (file==null) {
+						if (seq == 0 || file == null) {
+							//file name length
 							try{
-								outputFile = header_data.substring(50,150).trim();
-								file = new File(path, outputFile);
-								output = new FileOutputStream(file);
-								System.out.println("outputFile: "+outputFile);
+								temp = new byte[4];
+								System.arraycopy(in_data, 16, temp, 0, 4);
+								filename_length = ByteBuffer.wrap(temp).getInt();
+								System.out.println("filename_length: "+filename_length);
+								try{
+									outputFile = new String(in_data,20,filename_length).trim();
+									file = new File(path, outputFile);
+									output = new FileOutputStream(file);
+									System.out.println("outputFile: "+outputFile);
+								} catch (Exception e){
+									e.printStackTrace();
+									error = true;
+								}
 							} catch (Exception e){
 								e.printStackTrace();
 								error = true;
@@ -96,6 +95,7 @@ public class Receiver {
 						}
 
 					}
+					else { System.err.println("corrupted/reordered packet"); error = true; }
 
 					//write response
 					if(response.isEmpty()){
@@ -109,11 +109,11 @@ public class Receiver {
 					sk3.send(out_pkt);
 
 					//exit if finished
-					if(response.compareTo("FIN")==0){ output.flush(); System.exit(-1); }
+					if(response.compareTo("FIN")==0){ output.flush();System.exit(-1); }
 
 					//write after sending to minimize delay
 					if(!error){
-						output.write(in_data, header_size, num_bytes);
+						output.write(in_data, seq==0?header_size+filename_length:header_size, num_bytes);
 					}
 				}
 			} catch (Exception e) {

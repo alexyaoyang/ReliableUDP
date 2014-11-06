@@ -1,14 +1,17 @@
 import java.io.*;
 import java.net.*;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.zip.CRC32;
 
 public class Sender {
 	static int pkt_size = 1000;
 	static int window_size = 10;
-	static int header_size = 150;
+	static int header_size = 20;
 	static int send_interval = 500;
 	static Queue<DatagramPacket> queue = new LinkedList<DatagramPacket>();
+	int sequence = 0;
+	int acked = -1;
 
 	public class OutThread extends Thread {
 		private DatagramSocket sk_out;
@@ -29,64 +32,76 @@ public class Sender {
 		public void run() {
 			try {
 				FileInputStream fileToSend = new FileInputStream(inputPath);
-				int sequence = 1, num_bytes_read;
+				int num_bytes_read, filename_byteLength = 0;
 				byte[] out_data;
 				InetAddress dst_addr = InetAddress.getByName("127.0.0.1");
+				DatagramPacket out_pkt;
 
-//				 To register the recv_port at the UnreliNet first
-				DatagramPacket out_pkt = new DatagramPacket(
-						("REG:" + recv_port).getBytes(),
-						("REG:" + recv_port).getBytes().length, dst_addr,
-						dst_port);
-				sk_out.send(out_pkt);
+				//				 To register the recv_port at the UnreliNet first
+				//				DatagramPacket out_pkt = new DatagramPacket(
+				//						("REG:" + recv_port).getBytes(),
+				//						("REG:" + recv_port).getBytes().length, dst_addr,
+				//						dst_port);
+				//				sk_out.send(out_pkt);
 
 				try {
 					while (true) {
 						// construct the packet
 						out_data = new byte[pkt_size];
-						
+
+						//sequence 4
+						byte[] seq = ByteBuffer.allocate(4).putInt(sequence).array();//Integer.toString(sequence).getBytes();
+						System.out.println("seq: "+sequence);
+						for(int i=8; i<seq.length+8; i++){
+							out_data[i] = seq[i-8];
+						}
+
+						if(sequence == 0){
+							byte[] fileName = outputPath.getBytes();
+							filename_byteLength = fileName.length;
+							
+							//filename length 4
+							byte[] filenameLength = ByteBuffer.allocate(4).putInt(filename_byteLength).array();
+							System.out.println("filename_byteLength: "+filename_byteLength);
+							for(int i=16; i<filenameLength.length+16; i++){
+								out_data[i] = filenameLength[i-16];
+							}
+							
+							//filename 100
+							System.out.println("fileName: "+outputPath);
+							for(int i=20; i<fileName.length+20; i++){
+								out_data[i] = fileName[i-20];
+							}
+						}
+
 						//file data
 						num_bytes_read = -1;
-						if ((num_bytes_read = fileToSend.read(out_data, header_size, pkt_size-header_size)) == -1) {
+						if ((num_bytes_read = fileToSend.read(out_data, sequence==0?header_size+filename_byteLength:header_size, pkt_size-(sequence==0?header_size+filename_byteLength:header_size))) == -1) {
 							System.out.println("reached end of file!");
 						}
-						
-						//checksum 12
+
+						//content size 4
+						byte[] num_bytes = ByteBuffer.allocate(4).putInt(num_bytes_read).array();
+						System.out.println("num_bytes: "+num_bytes_read);
+						for(int i=12; i<num_bytes.length+12; i++){
+							out_data[i] = num_bytes[i-12];
+						}
+
+						//checksum 8
 						crc = new CRC32();
-						crc.update(out_data, header_size, pkt_size-header_size);
-						byte[] checksum = ("C:"+Long.toString(crc.getValue())).getBytes();
-						System.out.println(checksum.length);
+						crc.update(out_data, 8, pkt_size-8);
+						byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();//Long.toString(crc.getValue()).getBytes();
+						System.out.println("checksum: "+crc.getValue());
 						for(int i=0; i<checksum.length; i++){
 							out_data[i] = checksum[i];
 						}
-						
-						//sequence 12
-						byte[] seq = ("S:"+Integer.toString(sequence)).getBytes();
-						System.out.println(seq.length);
-						for(int i=15; i<seq.length+15; i++){
-							out_data[i] = seq[i-15];
-						}
-						
-						//content size 5
-						byte[] num_bytes = ("N:"+Integer.toString(num_bytes_read)).getBytes();
-						System.out.println(num_bytes.length);
-						for(int i=30; i<num_bytes.length+30; i++){
-							out_data[i] = num_bytes[i-30];
-						}
-						
-						//filename 100
-						byte[] fileName = ("O:"+outputPath).getBytes();
-						System.out.println(fileName.length);
-						for(int i=48; i<fileName.length+48; i++){
-							out_data[i] = fileName[i-48];
-						}
-						
+
 						// send the packet
 						out_pkt = new DatagramPacket(out_data, out_data.length,
 								dst_addr, dst_port);
 						queue.offer(out_pkt);
 						sk_out.send(out_pkt);
-						
+
 						System.out.println("sent packet #"+sequence);
 
 						// wait for a while
@@ -94,7 +109,7 @@ public class Sender {
 
 						// increase counter
 						sequence++;
-						
+
 						if(num_bytes_read==-1){
 							System.exit(-1);
 						}
@@ -122,15 +137,20 @@ public class Sender {
 		public void run() {
 			try {
 				byte[] in_data = new byte[pkt_size];
-				DatagramPacket in_pkt = new DatagramPacket(in_data,
-						in_data.length);
+				DatagramPacket in_pkt = new DatagramPacket(in_data, in_data.length);
 				String response_data;
 				try {
 					while (true) {
 						sk_in.receive(in_pkt);
 						response_data = (new String(in_pkt.getData(),0,header_size));
-						
+
 						System.out.println("Response received: "+response_data);
+						
+						if(response_data.startsWith("FIN")) {  }
+						else if(response_data.startsWith("ACK") && Integer.parseInt((response_data.substring(response_data.length()-1))) == (acked+1)){
+							queue.poll();
+							acked++;
+						}
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
@@ -167,12 +187,12 @@ public class Sender {
 
 	public static void main(String[] args) {
 		// parse parameters
-//		if (args.length != 4) {
-//			System.err
-//					.println("Usage: java TestSender sk1_dst_port, sk4_dst_port, inputFilePath, outputFileName");
-//			System.exit(-1);
-//		} else
-//			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
+		//		if (args.length != 4) {
+		//			System.err
+		//					.println("Usage: java TestSender sk1_dst_port, sk4_dst_port, inputFilePath, outputFileName");
+		//			System.exit(-1);
+		//		} else
+		//			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
 		new Sender(20000, 20003, "mytext.txt", "blahblahblahblahblahtest.txt");
 	}
 }
