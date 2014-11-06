@@ -1,17 +1,21 @@
 import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
+import java.sql.Time;
 import java.util.*;
 import java.util.zip.CRC32;
 
 public class Sender {
 	static int pkt_size = 1000;
-	static int window_size = 10;
+	static int window_size = 5;
 	static int header_size = 20;
 	static int send_interval = 500;
+	static int timeout_interval = 2000;
 	static Queue<DatagramPacket> queue = new LinkedList<DatagramPacket>();
 	int sequence = 0;
 	int acked = -1;
+	boolean resend = false;
+	Timer timer;
 
 	public class OutThread extends Thread {
 		private DatagramSocket sk_out;
@@ -32,10 +36,11 @@ public class Sender {
 		public void run() {
 			try {
 				FileInputStream fileToSend = new FileInputStream(inputPath);
-				int num_bytes_read, filename_byteLength = 0;
+				int num_bytes_read = 0, filename_byteLength = 0;
 				byte[] out_data;
 				InetAddress dst_addr = InetAddress.getByName("127.0.0.1");
 				DatagramPacket out_pkt;
+				boolean continueSending = true;
 
 				//				 To register the recv_port at the UnreliNet first
 				//				DatagramPacket out_pkt = new DatagramPacket(
@@ -45,73 +50,96 @@ public class Sender {
 				//				sk_out.send(out_pkt);
 
 				try {
-					while (true) {
-						// construct the packet
-						out_data = new byte[pkt_size];
-
-						//sequence 4
-						byte[] seq = ByteBuffer.allocate(4).putInt(sequence).array();//Integer.toString(sequence).getBytes();
-						System.out.println("seq: "+sequence);
-						for(int i=8; i<seq.length+8; i++){
-							out_data[i] = seq[i-8];
+					while (num_bytes_read!=-1) {
+						if(queue.size() < window_size){
+							continueSending = true;
 						}
-
-						if(sequence == 0){
-							byte[] fileName = outputPath.getBytes();
-							filename_byteLength = fileName.length;
-							
-							//filename length 4
-							byte[] filenameLength = ByteBuffer.allocate(4).putInt(filename_byteLength).array();
-							System.out.println("filename_byteLength: "+filename_byteLength);
-							for(int i=16; i<filenameLength.length+16; i++){
-								out_data[i] = filenameLength[i-16];
+						if(resend){
+							for (int i=0;i<queue.size();i++) {
+								System.out.println("resending packet" + (acked+1+i));
+								DatagramPacket retransmit_pkt = queue.poll();
+								queue.offer(retransmit_pkt);
+								sk_out.send(retransmit_pkt);
 							}
-							
-							//filename 100
-							System.out.println("fileName: "+outputPath);
-							for(int i=20; i<fileName.length+20; i++){
-								out_data[i] = fileName[i-20];
+							resend = false;
+						}
+						while(continueSending){
+							// construct the packet
+							out_data = new byte[pkt_size];
+
+							//sequence 4
+							byte[] seq = ByteBuffer.allocate(4).putInt(sequence).array();//Integer.toString(sequence).getBytes();
+							System.out.println("seq: "+sequence);
+							for(int i=8; i<seq.length+8; i++){
+								out_data[i] = seq[i-8];
 							}
-						}
 
-						//file data
-						num_bytes_read = -1;
-						if ((num_bytes_read = fileToSend.read(out_data, sequence==0?header_size+filename_byteLength:header_size, pkt_size-(sequence==0?header_size+filename_byteLength:header_size))) == -1) {
-							System.out.println("reached end of file!");
-						}
+							if(sequence == 0){
+								byte[] fileName = outputPath.getBytes();
+								filename_byteLength = fileName.length;
 
-						//content size 4
-						byte[] num_bytes = ByteBuffer.allocate(4).putInt(num_bytes_read).array();
-						System.out.println("num_bytes: "+num_bytes_read);
-						for(int i=12; i<num_bytes.length+12; i++){
-							out_data[i] = num_bytes[i-12];
-						}
+								//filename length 4
+								byte[] filenameLength = ByteBuffer.allocate(4).putInt(filename_byteLength).array();
+								System.out.println("filename_byteLength: "+filename_byteLength);
+								for(int i=16; i<filenameLength.length+16; i++){
+									out_data[i] = filenameLength[i-16];
+								}
 
-						//checksum 8
-						crc = new CRC32();
-						crc.update(out_data, 8, pkt_size-8);
-						byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();//Long.toString(crc.getValue()).getBytes();
-						System.out.println("checksum: "+crc.getValue());
-						for(int i=0; i<checksum.length; i++){
-							out_data[i] = checksum[i];
-						}
+								//filename 100
+								System.out.println("fileName: "+outputPath);
+								for(int i=20; i<fileName.length+20; i++){
+									out_data[i] = fileName[i-20];
+								}
+							}
 
-						// send the packet
-						out_pkt = new DatagramPacket(out_data, out_data.length,
-								dst_addr, dst_port);
-						queue.offer(out_pkt);
-						sk_out.send(out_pkt);
+							//file data
+							num_bytes_read = -1;
+							if ((num_bytes_read = fileToSend.read(out_data, sequence==0?header_size+filename_byteLength:header_size, pkt_size-(sequence==0?header_size+filename_byteLength:header_size))) == -1) {
+								System.out.println("reached end of file!");
+							}
 
-						System.out.println("sent packet #"+sequence);
+							//content size 4
+							byte[] num_bytes = ByteBuffer.allocate(4).putInt(num_bytes_read).array();
+							System.out.println("num_bytes: "+num_bytes_read);
+							for(int i=12; i<num_bytes.length+12; i++){
+								out_data[i] = num_bytes[i-12];
+							}
 
-						// wait for a while
-						sleep(send_interval);
+							//checksum 8
+							crc = new CRC32();
+							crc.update(out_data, 8, pkt_size-8);
+							byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();//Long.toString(crc.getValue()).getBytes();
+							System.out.println("checksum: "+crc.getValue());
+							for(int i=0; i<checksum.length; i++){
+								out_data[i] = checksum[i];
+							}
 
-						// increase counter
-						sequence++;
+							// send the packet
+							out_pkt = new DatagramPacket(out_data, out_data.length,
+									dst_addr, dst_port);
+							queue.offer(out_pkt);
+							sk_out.send(out_pkt);
+							
+							timer = new Timer();
+							timer.schedule(new TimerTask() {
+								@Override
+								public void run() {
+									System.out.println("checking if acked: "+sequence);
+								}
+							}, 500);
 
-						if(num_bytes_read==-1){
-							System.exit(-1);
+							System.out.println("sent packet #"+sequence);
+
+							// wait for a while
+							sleep(send_interval);
+
+							//if done with file or queue larger than window size
+							if(num_bytes_read == -1 || queue.size() > window_size){ 
+								continueSending = false; 
+							}
+
+							// increase counter
+							sequence++;
 						}
 					}
 				} catch (Exception e) {
@@ -142,14 +170,23 @@ public class Sender {
 				try {
 					while (true) {
 						sk_in.receive(in_pkt);
-						response_data = (new String(in_pkt.getData(),0,header_size));
 
-						System.out.println("Response received: "+response_data);
-						
-						if(response_data.startsWith("FIN")) {  }
-						else if(response_data.startsWith("ACK") && Integer.parseInt((response_data.substring(response_data.length()-1))) == (acked+1)){
+						response_data = (new String(in_data,0,10)).trim();
+
+						if(response_data.startsWith("FIN")) {
+							System.out.println("removing last packet queue: "+response_data);
 							queue.poll();
 							acked++;
+							break;
+						}
+						else if(response_data.startsWith("ACK") && Integer.parseInt((response_data.substring(response_data.length()-1))) == (acked+1)){
+							System.out.println("removing packet from queue: "+response_data);
+							queue.poll();
+							acked++;
+						}
+						else {
+							System.out.println("Response received: "+response_data);
+							resend = true;
 						}
 					}
 				} catch (Exception e) {

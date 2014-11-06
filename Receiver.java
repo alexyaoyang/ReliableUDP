@@ -53,26 +53,29 @@ public class Receiver {
 							System.arraycopy(in_data, 8, temp, 0, 4);
 							seq = ByteBuffer.wrap(temp).getInt();
 							if(seq-ack == 1 || seq == 0){ ack = seq; }
-							System.out.println("seq: "+seq);
+							else { response = "ACK:" + ack; error = true; }
+							System.out.println("seq: "+ack);
 						} catch (Exception e){
 							e.printStackTrace();
 							error = true;
 						}
 
-						//num bytes
-						try{
-							temp = new byte[4];
-							System.arraycopy(in_data, 12, temp, 0, 4);
-							num_bytes = ByteBuffer.wrap(temp).getInt();		
-							System.out.println("num_bytes: "+num_bytes);
-							if(num_bytes == -1) { response = "FIN"; }
-						} catch (Exception e){
-							e.printStackTrace();
-							error = true;
+						if(error == false){
+							//num bytes
+							try{
+								temp = new byte[4];
+								System.arraycopy(in_data, 12, temp, 0, 4);
+								num_bytes = ByteBuffer.wrap(temp).getInt();		
+								System.out.println("num_bytes: "+num_bytes);
+								if(num_bytes == -1) { response = "FIN"; }
+							} catch (Exception e){
+								e.printStackTrace();
+								error = true;
+							}
 						}
 
 						//output file
-						if (seq == 0 || file == null) {
+						if ((seq == 0 || file == null) && error == false) {
 							//file name length
 							try{
 								temp = new byte[4];
