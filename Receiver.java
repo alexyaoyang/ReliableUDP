@@ -10,6 +10,7 @@ import java.util.zip.CRC32;
 public class Receiver {
 	static int pkt_size = 1000;
 	static int header_size = 20;
+	static int response_size = 100;
 
 	public Receiver(int sk2_dst_port, int sk3_dst_port, String outputPath) {
 		DatagramSocket sk2, sk3;
@@ -30,16 +31,20 @@ public class Receiver {
 			boolean error;
 			try {
 				byte[] in_data = new byte[pkt_size];
+				byte[] out_data = new byte[response_size];
 				DatagramPacket in_pkt = new DatagramPacket(in_data, in_data.length);
 				InetAddress dst_addr = InetAddress.getByName("127.0.0.1");
 				DatagramPacket out_pkt;
 				byte[] temp;
 				while (true) {
+					out_data = new byte[response_size];
 					error = false;
 					response = "";
 					// receive packet
 					sk2.receive(in_pkt);
-
+					
+					System.out.println();
+					
 					//checksum first
 					crc = new CRC32();
 					crc.update(in_data, 8, pkt_size-8);
@@ -52,9 +57,11 @@ public class Receiver {
 							temp = new byte[4];
 							System.arraycopy(in_data, 8, temp, 0, 4);
 							seq = ByteBuffer.wrap(temp).getInt();
-							if(seq-ack == 1 || seq == 0){ ack = seq; }
-							else { response = "ACK:" + ack; error = true; }
-							System.out.println("seq: "+ack);
+
+							System.out.println("current ack: "+ack+" seq received: "+seq);
+							
+							if(seq == ack){ ack++; }
+							else { error = true; response = "ACK:" + seq; }
 						} catch (Exception e){
 							e.printStackTrace();
 							error = true;
@@ -75,7 +82,7 @@ public class Receiver {
 						}
 
 						//output file
-						if ((seq == 0 || file == null) && error == false) {
+						if (seq == 0 && error == false) {
 							//file name length
 							try{
 								temp = new byte[4];
@@ -103,19 +110,35 @@ public class Receiver {
 					//write response
 					if(response.isEmpty()){
 						if(error){ response = "NAK"; }
-						else { response = "ACK:" + ack; }
+						else { response = "ACK:" + seq; }
 					}
 					byte[] responseB = response.getBytes();
-
+					for(int i=8; i<responseB.length+8; i++){
+						out_data[i] = responseB[i-8];
+					}
+					
+					//create checksum for response message
+					crc = new CRC32();
+					crc.update(out_data, 8, response_size-8);
+					byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();
+					for(int i=0; i<checksum.length; i++){
+						out_data[i] = checksum[i];
+					}
+					
+					System.out.println("sending response: "+response);
+					
 					// send received packet
-					out_pkt = new DatagramPacket(responseB, responseB.length, dst_addr, sk3_dst_port);
+					out_pkt = new DatagramPacket(out_data, out_data.length, dst_addr, sk3_dst_port);
 					sk3.send(out_pkt);
 
 					//exit if finished
-					if(response.compareTo("FIN")==0){ output.flush();System.exit(-1); }
+					if(response.compareTo("FIN")==0){ 
+						for(int i = 0; i < 10; i++) { sk3.send(out_pkt); }
+						output.flush();System.exit(-1); 
+					}
 
 					//write after sending to minimize delay
-					if(!error){
+					if(!error && output != null){
 						output.write(in_data, seq==0?header_size+filename_length:header_size, num_bytes);
 					}
 				}
@@ -135,6 +158,7 @@ public class Receiver {
 				} catch (IOException e2) {
 					e2.printStackTrace();
 				}
+				System.exit(-1);
 			}
 		} catch (SocketException e1) {	
 			e1.printStackTrace();

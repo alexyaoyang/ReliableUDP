@@ -7,15 +7,20 @@ import java.util.zip.CRC32;
 
 public class Sender {
 	static int pkt_size = 1000;
-	static int window_size = 5;
+	static int window_size = 10;
 	static int header_size = 20;
-	static int send_interval = 500;
-	static int timeout_interval = 2000;
-	static Queue<DatagramPacket> queue = new LinkedList<DatagramPacket>();
+	static int timeout_interval = 300;
+	static int response_size = 100;
+	static ArrayList<byte[]> packetQueue = new ArrayList<byte[]>();
+	static ArrayList<Integer> timeoutQueue = new ArrayList<Integer>();
 	int sequence = 0;
-	int acked = -1;
+	int base = 0;
 	boolean resend = false;
+	boolean continueSending = true;
 	Timer timer;
+	TimerTask tt;
+	CRC32 crc;
+	boolean finished = false;
 
 	public class OutThread extends Thread {
 		private DatagramSocket sk_out;
@@ -23,7 +28,6 @@ public class Sender {
 		private int recv_port;
 		private String inputPath;
 		private String outputPath;
-		private CRC32 crc;
 
 		public OutThread(DatagramSocket sk_out, int dst_port, int recv_port, String inputPath, String outputPath) {
 			this.sk_out = sk_out;
@@ -40,33 +44,44 @@ public class Sender {
 				byte[] out_data;
 				InetAddress dst_addr = InetAddress.getByName("127.0.0.1");
 				DatagramPacket out_pkt;
-				boolean continueSending = true;
-
-				//				 To register the recv_port at the UnreliNet first
-				//				DatagramPacket out_pkt = new DatagramPacket(
-				//						("REG:" + recv_port).getBytes(),
-				//						("REG:" + recv_port).getBytes().length, dst_addr,
-				//						dst_port);
-				//				sk_out.send(out_pkt);
 
 				try {
-					while (num_bytes_read!=-1) {
-						if(queue.size() < window_size){
+					while (!finished) {
+						sleep(10);
+//						System.out.println("resend: "+resend+" continueSending: "+continueSending);
+						if((sequence - base) < window_size){
 							continueSending = true;
 						}
+						//						else {
+						//							System.out.println("queue full, waiting...");
+						//						}
 						if(resend){
-							for (int i=0;i<queue.size();i++) {
-								System.out.println("resending packet" + (acked+1+i));
-								DatagramPacket retransmit_pkt = queue.poll();
-								queue.offer(retransmit_pkt);
-								sk_out.send(retransmit_pkt);
+							System.out.println();
+							
+							for (int i=base;i<packetQueue.size();i++) {
+								System.out.println("resending packet #" + (i));
+
+								byte[] resend = packetQueue.get(i);
+								crc = new CRC32();
+								crc.update(resend, 8, pkt_size-8);
+								byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();
+								for(int j=0; j<checksum.length; j++){
+									resend[j] = checksum[j];
+								}
+								
+								out_pkt = new DatagramPacket(resend, resend.length,
+										dst_addr, dst_port);
+								
+								sk_out.send(out_pkt);
 							}
 							resend = false;
 						}
-						while(continueSending){
+						while(continueSending && !resend && num_bytes_read != -1){
 							// construct the packet
 							out_data = new byte[pkt_size];
 
+							System.out.println();
+							
 							//sequence 4
 							byte[] seq = ByteBuffer.allocate(4).putInt(sequence).array();//Integer.toString(sequence).getBytes();
 							System.out.println("seq: "+sequence);
@@ -108,7 +123,7 @@ public class Sender {
 							//checksum 8
 							crc = new CRC32();
 							crc.update(out_data, 8, pkt_size-8);
-							byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();//Long.toString(crc.getValue()).getBytes();
+							byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();
 							System.out.println("checksum: "+crc.getValue());
 							for(int i=0; i<checksum.length; i++){
 								out_data[i] = checksum[i];
@@ -117,29 +132,18 @@ public class Sender {
 							// send the packet
 							out_pkt = new DatagramPacket(out_data, out_data.length,
 									dst_addr, dst_port);
-							queue.offer(out_pkt);
+							packetQueue.add(out_data);
+							timeoutQueue.add(sequence);
 							sk_out.send(out_pkt);
-							
-							timer = new Timer();
-							timer.schedule(new TimerTask() {
-								@Override
-								public void run() {
-									System.out.println("checking if acked: "+sequence);
-								}
-							}, 500);
 
 							System.out.println("sent packet #"+sequence);
 
-							// wait for a while
-							sleep(send_interval);
-
-							//if done with file or queue larger than window size
-							if(num_bytes_read == -1 || queue.size() > window_size){ 
-								continueSending = false; 
-							}
-
 							// increase counter
 							sequence++;
+
+							if((sequence - base) >= window_size){
+								continueSending = false; 
+							}
 						}
 					}
 				} catch (Exception e) {
@@ -147,6 +151,7 @@ public class Sender {
 				} finally {
 					sk_out.close();
 					fileToSend.close();
+					System.exit(-1);
 				}
 			} catch (Exception e) {
 				e.printStackTrace();
@@ -164,29 +169,52 @@ public class Sender {
 
 		public void run() {
 			try {
-				byte[] in_data = new byte[pkt_size];
+				byte[] in_data = new byte[response_size];
 				DatagramPacket in_pkt = new DatagramPacket(in_data, in_data.length);
 				String response_data;
+				int count = 0;
+				byte[] temp;
 				try {
-					while (true) {
+					while (!finished) {
 						sk_in.receive(in_pkt);
+						
+						System.out.println();
+						
+						crc = new CRC32();
+						crc.update(in_data, 8, response_size-8);
+						temp = new byte[8];
+						System.arraycopy(in_data, 0, temp, 0, 8);
+						if(ByteBuffer.wrap(temp).getLong() == crc.getValue()){
 
-						response_data = (new String(in_data,0,10)).trim();
+							response_data = (new String(in_data,8,response_size-8)).trim();
+							System.out.println("current base: "+base+" response received: "+response_data);
 
-						if(response_data.startsWith("FIN")) {
-							System.out.println("removing last packet queue: "+response_data);
-							queue.poll();
-							acked++;
-							break;
+							if(response_data.startsWith("FIN")) {
+								System.out.println("FINISHED!");
+								finished = true;
+							}
+							else if(response_data.startsWith("ACK:")){
+								if(Integer.parseInt((response_data.substring(4))) == (base)){
+									base++;
+									System.out.println("increased base: "+base);
+								}
+								else {
+									count++;
+								}
+							}
+							else if(response_data.startsWith("NAK")){
+								System.out.println("NAK received! Resending");
+								resend = true;
+							}
 						}
-						else if(response_data.startsWith("ACK") && Integer.parseInt((response_data.substring(response_data.length()-1))) == (acked+1)){
-							System.out.println("removing packet from queue: "+response_data);
-							queue.poll();
-							acked++;
-						}
-						else {
-							System.out.println("Response received: "+response_data);
+						else{
+							System.out.println("Response corrupted! Resending");
 							resend = true;
+						}
+						if(count > 5){
+							System.out.println("5 wrong acks received, resending");
+							resend = true;
+							count = 0;
 						}
 					}
 				} catch (Exception e) {
@@ -216,10 +244,26 @@ public class Sender {
 			OutThread th_out = new OutThread(sk1, sk1_dst_port, sk4_dst_port, inputPath, outputPath);
 			th_in.start();
 			th_out.start();
+			startTimer();
+			
 		} catch (Exception e) {
 			e.printStackTrace();
 			System.exit(-1);
 		}
+	}
+
+	private void startTimer() {
+		timer = new Timer();
+		tt = new TimerTask() {
+			@Override
+			public void run() {
+				if(base < sequence) {
+					//System.out.println("timeout, resending");
+					resend = true;
+				}
+			}
+		};
+		timer.scheduleAtFixedRate(tt, timeout_interval, timeout_interval);
 	}
 
 	public static void main(String[] args) {
@@ -230,6 +274,9 @@ public class Sender {
 		//			System.exit(-1);
 		//		} else
 		//			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
-		new Sender(20000, 20003, "mytext.txt", "blahblahblahblahblahtest.txt");
+		//new Sender(20000, 20003, "test.txt", "blahblahblahblahblahtest.txt");
+		new Sender(20000, 20003, "pic2.jpg", "blahblahblahblahblahtest.jpg");
+		//new Sender(20000, 20003, "ALexbug2.pdf", "blahblahblahblahblahtest.pdf");
+		//new Sender(20000, 20003, "galaxy.jpg", "blahblahblahblahblahtest.jpg");
 	}
 }
