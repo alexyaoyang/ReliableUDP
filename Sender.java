@@ -182,7 +182,7 @@ public class Sender {
 						temp = new byte[8];
 						System.arraycopy(in_data, 0, temp, 0, 8);
 						if(ByteBuffer.wrap(temp).getLong() == crc.getValue()){
-
+							
 							response_data = (new String(in_data,8,response_size-8)).trim();
 							System.out.println("current base: "+base+" response received: "+response_data);
 
@@ -242,7 +242,7 @@ public class Sender {
 			th_in.start();
 			th_out.start();
 			startTimer();
-			
+
 		} catch (Exception e) {
 			e.printStackTrace();
 			System.exit(-1);
@@ -255,10 +255,8 @@ public class Sender {
 			@Override
 			public void run() {
 				profile += timeout_interval;
-				if(base < sequence) {
-					//System.out.println("timeout, resending");
-					resend = true;
-				}
+				//System.out.println("timeout, resending");
+				resend = true;
 			}
 		};
 		timer.scheduleAtFixedRate(tt, timeout_interval, timeout_interval);
@@ -266,15 +264,14 @@ public class Sender {
 
 	public static void main(String[] args) {
 		// parse parameters
-		//		if (args.length != 4) {
-		//			System.err
-		//					.println("Usage: java TestSender sk1_dst_port, sk4_dst_port, inputFilePath, outputFileName");
-		//			System.exit(-1);
-		//		} else
-		//			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
+		if (args.length != 4) {
+			System.err.println("Usage: java TestSender sk1_dst_port, sk4_dst_port, inputFilePath, outputFileName");
+			System.exit(-1);
+		} else
+			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
 		//new Sender(20000, 20003, "test/test.txt", "blahblahblahblahblahtest.txt");
 		//new Sender(20000, 20003, "test/pic2.jpg", "blahblahblahblahblahtest.jpg");
-		new Sender(20000, 20003, "test/ALexbug2.pdf", "blahblahblahblahblahtest.pdf");
+		//new Sender(20000, 20003, "test/ALexbug2.pdf", "blahblahblahblahblahtest.pdf");
 		//new Sender(20000, 20003, "test/galaxy.jpg", "blahblahblahblahblahtest.jpg");
 	}
 }

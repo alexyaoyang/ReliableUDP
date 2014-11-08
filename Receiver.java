@@ -40,12 +40,12 @@ public class Receiver {
 					out_data = new byte[response_size];
 					error = false;
 					response = "";
-					
+
 					// receive packet
 					sk2.receive(in_pkt);
-					
+
 					//System.out.println();
-					
+
 					//checksum
 					crc = new CRC32();
 					crc.update(in_data, 8, pkt_size-8);
@@ -59,7 +59,7 @@ public class Receiver {
 							System.arraycopy(in_data, 8, temp, 0, 4);
 							seq = ByteBuffer.wrap(temp).getInt();
 							System.out.println("current ack: "+ack+" seq received: "+seq);
-							
+
 							if(seq == ack){ ack++; }
 							else { error = true; response = "ACK:" + seq; }
 						} catch (Exception e){
@@ -108,7 +108,7 @@ public class Receiver {
 					else { error = true; } // corrupted/reordered packet
 
 					//write response
-					if(response.isEmpty()){
+					if(response.length() == 0){
 						if(error){ response = "NAK"; }
 						else { response = "ACK:" + seq; }
 					}
@@ -116,7 +116,7 @@ public class Receiver {
 					for(int i=8; i<responseB.length+8; i++){
 						out_data[i] = responseB[i-8];
 					}
-					
+
 					//create checksum for response message
 					crc = new CRC32();
 					crc.update(out_data, 8, response_size-8);
@@ -124,9 +124,9 @@ public class Receiver {
 					for(int i=0; i<checksum.length; i++){
 						out_data[i] = checksum[i];
 					}
-					
+
 					//System.out.println("sending response: "+response);
-					
+
 					// send response packet
 					out_pkt = new DatagramPacket(out_data, out_data.length, dst_addr, sk3_dst_port);
 					sk3.send(out_pkt);
@@ -163,18 +163,19 @@ public class Receiver {
 				}
 				System.exit(-1);
 			}
-		} catch (SocketException e1) {	
-			e1.printStackTrace();
+		} catch (SocketException e) {
+			e.printStackTrace();
+			System.exit(-1);
 		}
 	}
 
 	public static void main(String[] args) {
 		// parse parameters
-		//		if (args.length != 3) {
-		//			System.err.println("Usage: java TestReceiver sk2_dst_port, sk3_dst_port, outputPath");
-		//			System.exit(-1);
-		//		} else
-		//			new Receiver(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2]);
-		new Receiver(20001, 20002, "./test/");
+		if (args.length != 3) {
+			System.err.println("Usage: java TestReceiver sk2_dst_port, sk3_dst_port, outputPath");
+			System.exit(-1);
+		} else
+			new Receiver(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2]);
+		//new Receiver(20001, 20002, "./test/");
 	}
 }
