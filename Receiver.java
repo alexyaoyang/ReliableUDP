@@ -40,12 +40,13 @@ public class Receiver {
 					out_data = new byte[response_size];
 					error = false;
 					response = "";
+					
 					// receive packet
 					sk2.receive(in_pkt);
 					
-					System.out.println();
+					//System.out.println();
 					
-					//checksum first
+					//checksum
 					crc = new CRC32();
 					crc.update(in_data, 8, pkt_size-8);
 					temp = new byte[8];
@@ -57,7 +58,6 @@ public class Receiver {
 							temp = new byte[4];
 							System.arraycopy(in_data, 8, temp, 0, 4);
 							seq = ByteBuffer.wrap(temp).getInt();
-
 							System.out.println("current ack: "+ack+" seq received: "+seq);
 							
 							if(seq == ack){ ack++; }
@@ -73,7 +73,7 @@ public class Receiver {
 								temp = new byte[4];
 								System.arraycopy(in_data, 12, temp, 0, 4);
 								num_bytes = ByteBuffer.wrap(temp).getInt();		
-								System.out.println("num_bytes: "+num_bytes);
+								//System.out.println("num_bytes: "+num_bytes);
 								if(num_bytes == -1) { response = "FIN"; }
 							} catch (Exception e){
 								e.printStackTrace();
@@ -88,12 +88,12 @@ public class Receiver {
 								temp = new byte[4];
 								System.arraycopy(in_data, 16, temp, 0, 4);
 								filename_length = ByteBuffer.wrap(temp).getInt();
-								System.out.println("filename_length: "+filename_length);
+								//System.out.println("filename_length: "+filename_length);
 								try{
 									outputFile = new String(in_data,20,filename_length).trim();
 									file = new File(path, outputFile);
 									output = new FileOutputStream(file);
-									System.out.println("outputFile: "+outputFile);
+									//System.out.println("outputFile: "+outputFile);
 								} catch (Exception e){
 									e.printStackTrace();
 									error = true;
@@ -105,7 +105,7 @@ public class Receiver {
 						}
 
 					}
-					else { System.err.println("corrupted/reordered packet"); error = true; }
+					else { error = true; } // corrupted/reordered packet
 
 					//write response
 					if(response.isEmpty()){
@@ -125,16 +125,19 @@ public class Receiver {
 						out_data[i] = checksum[i];
 					}
 					
-					System.out.println("sending response: "+response);
+					//System.out.println("sending response: "+response);
 					
-					// send received packet
+					// send response packet
 					out_pkt = new DatagramPacket(out_data, out_data.length, dst_addr, sk3_dst_port);
 					sk3.send(out_pkt);
 
 					//exit if finished
 					if(response.compareTo("FIN")==0){ 
-						for(int i = 0; i < 10; i++) { sk3.send(out_pkt); }
-						output.flush();System.exit(-1); 
+						System.out.println("Finished!");
+						//send a few more to ensure last packet gets through
+						for(int i = 0; i < 10; i++) { sk3.send(out_pkt); } 
+						output.flush();
+						System.exit(-1); 
 					}
 
 					//write after sending to minimize delay
@@ -167,7 +170,7 @@ public class Receiver {
 
 	public static void main(String[] args) {
 		// parse parameters
-		//		if (args.length != 2) {
+		//		if (args.length != 3) {
 		//			System.err.println("Usage: java TestReceiver sk2_dst_port, sk3_dst_port, outputPath");
 		//			System.exit(-1);
 		//		} else

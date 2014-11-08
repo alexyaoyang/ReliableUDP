@@ -12,7 +12,6 @@ public class Sender {
 	static int timeout_interval = 300;
 	static int response_size = 100;
 	static ArrayList<byte[]> packetQueue = new ArrayList<byte[]>();
-	static ArrayList<Integer> timeoutQueue = new ArrayList<Integer>();
 	int sequence = 0;
 	int base = 0;
 	boolean resend = false;
@@ -21,6 +20,7 @@ public class Sender {
 	TimerTask tt;
 	CRC32 crc;
 	boolean finished = false;
+	float profile = 0;
 
 	public class OutThread extends Thread {
 		private DatagramSocket sk_out;
@@ -47,20 +47,18 @@ public class Sender {
 
 				try {
 					while (!finished) {
-						sleep(10);
-//						System.out.println("resend: "+resend+" continueSending: "+continueSending);
+						sleep(1);
+						//System.out.println("resend: "+resend+" continueSending: "+continueSending);
 						if((sequence - base) < window_size){
 							continueSending = true;
 						}
-						//						else {
-						//							System.out.println("queue full, waiting...");
-						//						}
 						if(resend){
-							System.out.println();
-							
-							for (int i=base;i<packetQueue.size();i++) {
-								System.out.println("resending packet #" + (i));
+							//System.out.println();
 
+							for (int i=base;i<packetQueue.size();i++) {
+								//System.out.println("resending packet #" + (i));
+
+								//recalculate checksum
 								byte[] resend = packetQueue.get(i);
 								crc = new CRC32();
 								crc.update(resend, 8, pkt_size-8);
@@ -68,10 +66,9 @@ public class Sender {
 								for(int j=0; j<checksum.length; j++){
 									resend[j] = checksum[j];
 								}
-								
+
 								out_pkt = new DatagramPacket(resend, resend.length,
 										dst_addr, dst_port);
-								
 								sk_out.send(out_pkt);
 							}
 							resend = false;
@@ -80,11 +77,11 @@ public class Sender {
 							// construct the packet
 							out_data = new byte[pkt_size];
 
-							System.out.println();
-							
+							//System.out.println();
+
 							//sequence 4
 							byte[] seq = ByteBuffer.allocate(4).putInt(sequence).array();//Integer.toString(sequence).getBytes();
-							System.out.println("seq: "+sequence);
+							//System.out.println("seq: "+sequence);
 							for(int i=8; i<seq.length+8; i++){
 								out_data[i] = seq[i-8];
 							}
@@ -95,13 +92,13 @@ public class Sender {
 
 								//filename length 4
 								byte[] filenameLength = ByteBuffer.allocate(4).putInt(filename_byteLength).array();
-								System.out.println("filename_byteLength: "+filename_byteLength);
+								//System.out.println("filename_byteLength: "+filename_byteLength);
 								for(int i=16; i<filenameLength.length+16; i++){
 									out_data[i] = filenameLength[i-16];
 								}
 
-								//filename 100
-								System.out.println("fileName: "+outputPath);
+								//filename ~100
+								//System.out.println("fileName: "+outputPath);
 								for(int i=20; i<fileName.length+20; i++){
 									out_data[i] = fileName[i-20];
 								}
@@ -110,12 +107,12 @@ public class Sender {
 							//file data
 							num_bytes_read = -1;
 							if ((num_bytes_read = fileToSend.read(out_data, sequence==0?header_size+filename_byteLength:header_size, pkt_size-(sequence==0?header_size+filename_byteLength:header_size))) == -1) {
-								System.out.println("reached end of file!");
+								//System.out.println("reached end of file!");
 							}
 
 							//content size 4
 							byte[] num_bytes = ByteBuffer.allocate(4).putInt(num_bytes_read).array();
-							System.out.println("num_bytes: "+num_bytes_read);
+							//System.out.println("num_bytes: "+num_bytes_read);
 							for(int i=12; i<num_bytes.length+12; i++){
 								out_data[i] = num_bytes[i-12];
 							}
@@ -124,7 +121,7 @@ public class Sender {
 							crc = new CRC32();
 							crc.update(out_data, 8, pkt_size-8);
 							byte[] checksum = ByteBuffer.allocate(8).putLong(crc.getValue()).array();
-							System.out.println("checksum: "+crc.getValue());
+							//System.out.println("checksum: "+crc.getValue());
 							for(int i=0; i<checksum.length; i++){
 								out_data[i] = checksum[i];
 							}
@@ -133,10 +130,9 @@ public class Sender {
 							out_pkt = new DatagramPacket(out_data, out_data.length,
 									dst_addr, dst_port);
 							packetQueue.add(out_data);
-							timeoutQueue.add(sequence);
 							sk_out.send(out_pkt);
 
-							System.out.println("sent packet #"+sequence);
+							//System.out.println("sent packet #"+sequence);
 
 							// increase counter
 							sequence++;
@@ -177,9 +173,10 @@ public class Sender {
 				try {
 					while (!finished) {
 						sk_in.receive(in_pkt);
-						
-						System.out.println();
-						
+
+						//System.out.println();
+
+						//checksum
 						crc = new CRC32();
 						crc.update(in_data, 8, response_size-8);
 						temp = new byte[8];
@@ -190,29 +187,29 @@ public class Sender {
 							System.out.println("current base: "+base+" response received: "+response_data);
 
 							if(response_data.startsWith("FIN")) {
-								System.out.println("FINISHED!");
+								System.out.println("Finished! Time Spent: "+profile/1000f);
 								finished = true;
 							}
 							else if(response_data.startsWith("ACK:")){
 								if(Integer.parseInt((response_data.substring(4))) == (base)){
 									base++;
-									System.out.println("increased base: "+base);
+									//System.out.println("increased base: "+base);
 								}
-								else {
+								else { //wrong ack
 									count++;
 								}
 							}
 							else if(response_data.startsWith("NAK")){
-								System.out.println("NAK received! Resending");
+								//System.out.println("NAK received! Resending");
 								resend = true;
 							}
 						}
 						else{
-							System.out.println("Response corrupted! Resending");
+							//System.out.println("Response corrupted! Resending");
 							resend = true;
 						}
-						if(count > 5){
-							System.out.println("5 wrong acks received, resending");
+						if(count == 3){
+							//System.out.println("3 wrong acks received, resending");
 							resend = true;
 							count = 0;
 						}
@@ -257,6 +254,7 @@ public class Sender {
 		tt = new TimerTask() {
 			@Override
 			public void run() {
+				profile += timeout_interval;
 				if(base < sequence) {
 					//System.out.println("timeout, resending");
 					resend = true;
@@ -274,9 +272,9 @@ public class Sender {
 		//			System.exit(-1);
 		//		} else
 		//			new Sender(Integer.parseInt(args[0]), Integer.parseInt(args[1]), args[2], args[3]);
-		//new Sender(20000, 20003, "test.txt", "blahblahblahblahblahtest.txt");
-		new Sender(20000, 20003, "pic2.jpg", "blahblahblahblahblahtest.jpg");
-		//new Sender(20000, 20003, "ALexbug2.pdf", "blahblahblahblahblahtest.pdf");
-		//new Sender(20000, 20003, "galaxy.jpg", "blahblahblahblahblahtest.jpg");
+		//new Sender(20000, 20003, "test/test.txt", "blahblahblahblahblahtest.txt");
+		//new Sender(20000, 20003, "test/pic2.jpg", "blahblahblahblahblahtest.jpg");
+		new Sender(20000, 20003, "test/ALexbug2.pdf", "blahblahblahblahblahtest.pdf");
+		//new Sender(20000, 20003, "test/galaxy.jpg", "blahblahblahblahblahtest.jpg");
 	}
 }
