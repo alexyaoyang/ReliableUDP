@@ -3,7 +3,9 @@
 *.war
 *.ear
 *.class
-
+*.jpg
+*.txt
+*.pdf
 # eclipse specific git ignore
 *.pydevproject
 .project
